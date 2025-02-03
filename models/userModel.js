@@ -7,7 +7,7 @@ const matchSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ["win", "loose", "draw"],
+        enum: ["win", "lose", "draw"],
         required: true
     },
 },

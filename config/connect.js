@@ -4,11 +4,12 @@ const dotenv = require("dotenv");
 dotenv.config();
 
 const dbConnector = async () => {
-    await mongoose.connect(process.env.MONGODB_URL)
-        .then(() => console.log("MongoDB Connected"))
-        .catch((error) => {
-            console.log(error)
-        })
+    try {
+        await mongoose.connect(process.env.MONGODB_URL);
+        console.log("MongoDB Connected");
+    } catch (error) {
+        console.error("MongoDB Connection Error:", error);
+    }
 }
 
 module.exports = dbConnector;
