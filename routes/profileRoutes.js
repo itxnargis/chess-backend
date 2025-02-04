@@ -1,11 +1,10 @@
 const express = require('express');
-const { restrictToLoginUserOnly } = require('../middleware/auth');
+const { route } = require('./userRoutes');
 const router = express.Router();
 
-router.use(restrictToLoginUserOnly);
 
 router.get('/', (req, res) => {
-  res.json(req.user);
+  res.send(JSON.stringify(req.user));
 });
 
 router.get('/settings', (req, res) => {

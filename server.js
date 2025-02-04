@@ -1,4 +1,4 @@
-const createServer = require("http".createServer);
+const { createServer } = require("http");
 const { Server } = require("socket.io");
 const express = require("express");
 const cors = require("cors");
@@ -8,10 +8,11 @@ const userRoutes = require("./routes/userRoutes.js");
 const cookieParser = require("cookie-parser");
 const { restrictToLoginUserOnly } = require("./middlewares/auth.js");
 const path = require("path");
+
 dotenv.config();
 const dbConnector = require('./config/connect.js');
 const profileRoutes = require("./routes/profileRoutes.js");
-const { log } = require("console");
+
 dbConnector();
 
 const PORT = process.env.PORT || 8080;
@@ -19,7 +20,7 @@ const app = express();
 const httpServer = createServer(app);
 
 const corsOptions = {
-    origin: "http:localhost:5173",
+    origin: "http://localhost:5173",
     methods: ['GET', 'POST'],
     credentials: true
 };
@@ -27,7 +28,10 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 app.use(cookieParser());
-app.use(express.static(path.join(__dirname, "/frontend/dist")));
+
+// Serve frontend
+const frontendPath = path.resolve(__dirname, "frontend", "dist");
+app.use(express.static(frontendPath));
 
 app.use("/user", userRoutes);
 app.use("/profile", restrictToLoginUserOnly, profileRoutes);
@@ -39,10 +43,8 @@ app.get("/stockfish", async (req, res) => {
             params: req.query
         });
 
-        const bestMove = response.data.bestMove;
-
         res.json({
-            bestMove: bestMove
+            bestMove: response.data.bestMove
         });
 
     } catch (error) {
@@ -51,9 +53,10 @@ app.get("/stockfish", async (req, res) => {
 });
 
 app.get("*", (req, res) => {
-    res.sendFile(path.join(__dirname, "/frontend/dist/index.html"));
+    res.sendFile(path.join(frontendPath, "index.html"));
 });
 
+// Setup Socket.io
 const io = new Server(httpServer, {
     cors: {
         origin: 'http://localhost:5173',
@@ -63,9 +66,13 @@ const io = new Server(httpServer, {
 let pendingUser = null;
 
 io.on('connection', (socket) => {
-    console.log(socket);
+    console.log(`User connected: ${socket.id}`);
 
-    const user = JSON.parse(socket.handshake.query.user);
+    const user = socket.handshake.query.user ? JSON.parse(socket.handshake.query.user) : null;
+    if (!user) {
+        console.error("User not found in handshake query");
+        return;
+    }
 
     if (pendingUser) {
         const player1 = pendingUser;
@@ -88,22 +95,26 @@ io.on('connection', (socket) => {
         });
 
         player1.on('disconnect', () => {
-            player2.emit("Opponent diconnected");
+            console.log(`User disconnected: ${player1.id}`);
+            player2.emit("opponentDisconnected");
         });
 
         player2.on('disconnect', () => {
+            console.log(`User disconnected: ${player2.id}`);
             player1.emit('opponentDisconnected');
         });
+
     } else {
         pendingUser = socket;
-        socket.email('waiting', true);
+        socket.emit('waiting', true);
 
-        socket.on('discount', () => {
+        socket.on('disconnect', () => {
+            console.log(`Pending user disconnected: ${socket.id}`);
             pendingUser = null;
         });
-    };
+    }
 });
 
 httpServer.listen(PORT, () => {
-    console.log(`Server is running on ${PORT}`);
-})
+    console.log(`Server is running on port ${PORT}`);
+});
