@@ -37,47 +37,48 @@ const register = async (req, res) => {
 };
 
 const login = async (req, res) => {
-
     const { email, password } = req.body;
-
+  
+    // Convert to lowercase
     const lowerCaseEmail = email.toLowerCase();
-
+  
     try {
-        const user = await User.findOne({ email: lowerCaseEmail });
-
-        if (!user) {
-            return res.status(400).json({
-                error: "Invalid Credentials"
-            });
-        }
-
-        const token = jwt.sign({
-            userId: user._id,
-            username: user.username,
-            email: user.email,
-            matchHistory: user.matchHistory,
-            wins: user.wins,
-            loses: user.loses,
-            draws: user.draws,
-        },
-            process.env.JWT_SECRET, {
-            expiresIn: "4h"
-        });
-
-        res.cookies('token', token, {
-            httpOnly: true,
-            maxAge: 3600000,
-            secure: false,
-        });
-
-        res.status(200).json({
-            token,
-        });
-
-    } catch (error) {
-        res.status(500).json({ error: err.message });
+      const user = await User.findOne({ email: lowerCaseEmail });
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+  
+      const isMatch = await bcrypt.compare(password, user.password);
+      if (!isMatch) {
+        return res.status(400).json({ error: 'Invalid credentials' });
+      }
+  
+      const token = jwt.sign({
+        userId: user._id,
+        username: user.username,
+        email: user.email,
+        matchHistory: user.matchHistory,
+        wins: user.wins,
+        loses: user.loses,
+        draws: user.draws
+      }, process.env.JWT_SECRET, {
+        expiresIn: '4h'
+      });
+  
+      res.cookie('token', token, {
+        httpOnly: true,
+        maxAge: 3600000,
+        secure: false
+      });
+  
+      res.status(200).json({
+        token,
+      });
+  
+    } catch (err) {
+      res.status(500).json({ error: err.message });
     }
-}
+  };
 
 const getUserById = async (req, res) => {
     const { userId } = req.params;

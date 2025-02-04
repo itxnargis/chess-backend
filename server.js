@@ -29,8 +29,8 @@ app.use(cors(corsOptions));
 app.use(express.json());
 app.use(cookieParser());
 
-// Serve frontend
-const frontendPath = path.resolve(__dirname, "frontend", "dist");
+const frontendPath = path.resolve(__dirname, "../frontend/dist");
+
 app.use(express.static(frontendPath));
 
 app.use("/user", userRoutes);
