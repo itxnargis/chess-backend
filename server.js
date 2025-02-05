@@ -44,14 +44,13 @@ app.get("/stockfish", async (req, res) => {
         });
 
         res.json({
-            bestMove: response.data.bestMove
+            bestMove: response.data.bestmove
         });
 
     } catch (error) {
         res.status(500).send(`Error: ${error.message}`);
     }
 });
-
 app.get("*", (req, res) => {
     res.sendFile(path.join(frontendPath, "index.html"));
 });
