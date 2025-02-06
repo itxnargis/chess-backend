@@ -22,7 +22,7 @@ const httpServer = createServer(app);
 const corsOptions = {
     origin: "http://localhost:5173",
     methods: ['GET', 'POST'],
-    credentials: truez
+    credentials: true
 };
 
 app.use(cors(corsOptions));
