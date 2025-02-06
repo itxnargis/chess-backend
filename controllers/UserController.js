@@ -1,8 +1,6 @@
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-
 const User = require("../models/userModel");
-const { use } = require("framer-motion/client");
 
 const register = async (req, res) => {
     const { username, password, email } = req.body;
