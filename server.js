@@ -20,7 +20,7 @@ const app = express();
 const httpServer = createServer(app);
 
 const corsOptions = {
-    origin: "http://localhost:5173",
+    origin: "https://chess-frontend-dun.vercel.app",
     methods: ['GET', 'POST'],
     credentials: true
 };
@@ -58,7 +58,7 @@ app.get("*", (req, res) => {
 // Setup Socket.io
 const io = new Server(httpServer, {
     cors: {
-        origin: 'http://localhost:5173',
+        origin: 'https://chess-frontend-dun.vercel.app',
     }
 });
 
