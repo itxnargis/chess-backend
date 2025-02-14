@@ -1,6 +1,3 @@
-### **Backend README (`chess-master-backend`)**
-
-
 # ♟️ Chess Master (Backend)
 
 This is the **backend repository** for **Chess Master**, a full-featured chess web application.  
