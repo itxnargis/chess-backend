@@ -1,8 +1,6 @@
-
----
-
 ### **Backend README (`chess-master-backend`)**
-```md
+
+
 # ♟️ Chess Master (Backend)
 
 This is the **backend repository** for **Chess Master**, a full-featured chess web application.  
@@ -13,7 +11,7 @@ It powers the game logic, user authentication, matchmaking, and API services.
 
 ## 📢 Important!
 This repository contains only the **backend** code.  
-For the frontend UI, visit: **[Chess Master Frontend](https://your-frontend-repository-link)**.
+For the frontend UI, visit: **[Chess Master Frontend](https://github.com/itxnargis/chess-frontend)**.
 
 ---
 
@@ -50,7 +48,44 @@ For the frontend UI, visit: **[Chess Master Frontend](https://your-frontend-repo
 
 ## 🚀 Setup & Installation
 
-### 1️⃣ Clone the Repository
-```bash
-git clone https://github.com/yourusername/chess-master-backend.git
-cd chess-master-backend
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/yourusername/chess-master-backend.git
+   cd chess-master-backend
+   
+2. **Install Dependencies**
+    ```bash
+    npm install
+
+3. **Configure environment**
+    ```bash
+    PORT=5000
+    MONGO_URI=your_mongodb_connection_string
+    JWT_SECRET=your_secret_key
+    FRONTEND_URL=https://your-frontend-deployed-link.vercel.app
+
+4. **Start the server**
+     ```bash
+     npm start
+
+5. **Your API will be live at http://localhost:5000.**
+
+## 🤝 Contributing
+
+Contributions are welcome! Please follow these steps:
+
+1. Fork the project.
+2. Create your feature branch:
+   ```bash
+   git checkout -b feature/AmazingFeature
+3. Commit your changes:
+   ```bash
+   git commit -m 'Add some AmazingFeature'
+4. Push to the branch:
+    ```bash
+    git push origin feature/AmazingFeature
+5. Open a Pull Request.
+
+## 📄 License
+
+Distributed under the MIT License. See LICENSE for more information.
