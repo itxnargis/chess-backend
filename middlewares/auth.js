@@ -5,19 +5,17 @@ async function restrictToLoginUserOnly(req, res, next) {
 
     if (!userToken) {
         console.log("No token found in cookies");
-        return res.redirect("/login");
+        return res.status(401).json({ error: "Unauthorized. Please log in." });
     }
 
     const user = getUser(userToken);
     if (!user) {
         console.error("Invalid token or user not found");
-        return res.redirect("/login");
+        return res.status(403).json({ error: "Invalid token. Please log in again." });
     }
 
     req.user = user;
     next();
 }
 
-module.exports = {
-    restrictToLoginUserOnly,
-};
+module.exports = { restrictToLoginUserOnly };

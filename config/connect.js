@@ -6,10 +6,11 @@ dotenv.config();
 const dbConnector = async () => {
     try {
         await mongoose.connect(process.env.MONGODB_URL);
-        console.log("MongoDB Connected");
+        console.log("✅ MongoDB Connected Successfully");
     } catch (error) {
-        console.error("MongoDB Connection Error:", error);
+        console.error("❌ MongoDB Connection Failed:", error);
+        process.exit(1); 
     }
-}
+};
 
 module.exports = dbConnector;

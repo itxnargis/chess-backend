@@ -30,14 +30,13 @@ const register = async (req, res) => {
         });
 
     } catch (error) {
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ error: error.message });
     }
 };
 
 const login = async (req, res) => {
     const { email, password } = req.body;
   
-    // Convert to lowercase
     const lowerCaseEmail = email.toLowerCase();
   
     try {
