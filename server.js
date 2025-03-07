@@ -1,4 +1,3 @@
-// This is a modified version of your server.js file with improved socket handling
 
 const { createServer } = require("http")
 const { Server } = require("socket.io")
@@ -22,7 +21,7 @@ const httpServer = createServer(app)
 
 // Allow requests from all origins in production
 const corsOptions = {
-  origin: process.env.NODE_ENV === "production" ? true : ["http://localhost:5173", "http://localhost:3000"],
+  origin: process.env.NODE_ENV === "production" ? true : ["https://chess-frontend-dun.vercel.app", "http://localhost:5173"],
   methods: ["GET", "POST", "PUT", "DELETE"],
   credentials: true,
 }
@@ -32,26 +31,10 @@ app.use(express.json())
 app.use(cookieParser())
 
 const frontendPath = path.resolve(__dirname, "../frontend/dist")
-
 app.use(express.static(frontendPath))
 
 app.use("/user", userRoutes)
 app.use("/profile", restrictToLoginUserOnly, profileRoutes)
-
-app.get("/stockfish", async (req, res) => {
-  try {
-    const apiUrl = "https://stockfish.online/api/s/v2.php"
-    const response = await axios.get(apiUrl, {
-      params: req.query,
-    })
-
-    res.json({
-      bestMove: response.data.bestmove,
-    })
-  } catch (error) {
-    res.status(500).send(`Error: ${error.message}`)
-  }
-})
 
 // Add a health check endpoint
 app.get("/health", (req, res) => {
@@ -134,6 +117,11 @@ io.on("connection", (socket) => {
       socket.emit("opponent", opponentData.user)
       socket.emit("waiting", false)
 
+      // Send current game state (FEN) to the reconnected player
+      if (existingGame.currentFen) {
+        socket.emit("gameState", existingGame.currentFen)
+      }
+
       // Notify opponent of reconnection
       io.to(opponentData.socketId).emit("opponentReconnected", user.username)
 
@@ -184,6 +172,7 @@ io.on("connection", (socket) => {
         player2: player2,
         moves: [],
         startTime: Date.now(),
+        currentFen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", // Initial position
       })
 
       // Associate players with this game
@@ -217,26 +206,29 @@ io.on("connection", (socket) => {
       socket.emit("waitingCount", waitingPlayers.length)
     })
 
-    // Handle moves with improved validation
-    socket.on("move", (moveData) => {
+    // Handle moves with improved validation and acknowledgement
+    socket.on("move", (moveData, callback) => {
       const gameId = socket.data?.gameId
       if (!gameId) {
         console.error("Move received but player is not in a game")
-        socket.emit("error", { message: "You are not in a game" })
+        if (callback) callback({ success: false, error: "You are not in a game" })
+        else socket.emit("error", { message: "You are not in a game" })
         return
       }
 
       const game = activeGames.get(gameId)
       if (!game) {
         console.error("Game not found:", gameId)
-        socket.emit("error", { message: "Game not found" })
+        if (callback) callback({ success: false, error: "Game not found" })
+        else socket.emit("error", { message: "Game not found" })
         return
       }
 
       // Validate move data
       if (!moveData || !moveData.from || !moveData.to) {
         console.error("Invalid move data:", moveData)
-        socket.emit("error", { message: "Invalid move data" })
+        if (callback) callback({ success: false, error: "Invalid move data" })
+        else socket.emit("error", { message: "Invalid move data" })
         return
       }
 
@@ -247,20 +239,44 @@ io.on("connection", (socket) => {
         player: socket.id === game.player1.socketId ? "player1" : "player2",
       })
 
+      // Update current FEN if provided
+      if (moveData.fen) {
+        game.currentFen = moveData.fen
+      }
+
       // Forward the move to the opponent
       const isPlayer1 = game.player1.socketId === socket.id
       const opponentSocketId = isPlayer1 ? game.player2.socketId : game.player1.socketId
 
       io.to(opponentSocketId).emit("move", moveData)
+
+      // Send acknowledgement if callback provided
+      if (callback) callback({ success: true })
+    })
+
+    // Handle game state requests
+    socket.on("requestGameState", () => {
+      const gameId = socket.data?.gameId
+      if (!gameId) return
+
+      const game = activeGames.get(gameId)
+      if (!game || !game.currentFen) return
+
+      socket.emit("gameState", game.currentFen)
     })
 
     // Handle match completed event
     socket.on("matchCompleted", (result) => {
       console.log("Match completed:", result)
-      // You could implement additional logic here like updating ratings
+      const gameId = socket.data?.gameId
+
+      if (gameId && activeGames.has(gameId)) {
+        console.log(`Removing completed game ${gameId}`)
+        activeGames.delete(gameId)
+      }
     })
 
-    // Handle disconnection
+    // Handle disconnection with improved reconnection window
     socket.on("disconnect", () => {
       console.log(`User disconnected: ${socket.id}`)
 
@@ -277,24 +293,37 @@ io.on("connection", (socket) => {
       if (gameId) {
         const game = activeGames.get(gameId)
         if (game) {
-          // Notify opponent
+          // Determine which player disconnected
           const isPlayer1 = game.player1.socketId === socket.id
           const opponentSocketId = isPlayer1 ? game.player2.socketId : game.player1.socketId
           const disconnectedUser = isPlayer1 ? game.player1.user : game.player2.user
+          const opponentUser = isPlayer1 ? game.player2.user : game.player1.user
 
           console.log(`Player ${disconnectedUser.username} disconnected from game ${gameId}`)
 
-          // Keep the game active for a short period to allow reconnection
+          // Mark the player as disconnected but keep the game active for a reconnection window
+          if (isPlayer1) {
+            game.player1.disconnectedAt = Date.now()
+          } else {
+            game.player2.disconnectedAt = Date.now()
+          }
+
+          // Set a timer to check for reconnection
           setTimeout(() => {
             const updatedGame = activeGames.get(gameId)
-            if (updatedGame) {
-              // Check if the player has reconnected
-              const currentSocketId = isPlayer1 ? updatedGame.player1.socketId : updatedGame.player2.socketId
-              if (currentSocketId === socket.id) {
-                console.log(`Player ${disconnectedUser.username} did not reconnect, ending game ${gameId}`)
-                io.to(opponentSocketId).emit("opponentDisconnected", disconnectedUser.username)
-                activeGames.delete(gameId)
-              }
+            if (!updatedGame) return // Game was already removed
+
+            const disconnectedPlayer = isPlayer1 ? updatedGame.player1 : updatedGame.player2
+
+            // If the player hasn't reconnected within the grace period (30 seconds)
+            if (disconnectedPlayer.disconnectedAt && Date.now() - disconnectedPlayer.disconnectedAt > 30000) {
+              console.log(`Player ${disconnectedUser.username} did not reconnect within grace period`)
+
+              // Notify opponent of the win due to disconnection
+              io.to(opponentSocketId).emit("opponentDisconnected", disconnectedUser.username)
+
+              // Remove the game
+              activeGames.delete(gameId)
             }
           }, 30000) // 30 second grace period for reconnection
         }
