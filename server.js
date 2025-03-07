@@ -22,7 +22,7 @@ const httpServer = createServer(app)
 
 // Allow requests from all origins in production
 const corsOptions = {
-  origin: process.env.NODE_ENV === "production" ? true : ["https://chess-frontend-dun.vercel.app", "http://localhost:5173"],
+  origin: process.env.NODE_ENV === "production" ? true : ["http://localhost:5173", "http://localhost:3000"],
   methods: ["GET", "POST", "PUT", "DELETE"],
   credentials: true,
 }
@@ -77,9 +77,11 @@ const activeGames = new Map()
 // Debug function to log the current state
 const logServerState = () => {
   console.log(`[SERVER STATE] Waiting players: ${waitingPlayers.length}, Active games: ${activeGames.size}`)
-  console.log(
-    `[WAITING PLAYERS] ${JSON.stringify(waitingPlayers.map((p) => ({ id: p.socketId, username: p.user.username })))}`,
-  )
+  if (waitingPlayers.length > 0) {
+    console.log(
+      `[WAITING PLAYERS] ${JSON.stringify(waitingPlayers.map((p) => ({ id: p.socketId, username: p.user.username })))}`,
+    )
+  }
 }
 
 // Set up periodic logging
@@ -99,34 +101,43 @@ io.on("connection", (socket) => {
     console.log(`User ${user.username} (${user.userId}) connected with socket ${socket.id}`)
 
     // Check if user is already in a game
+    let existingGame = null
+    let existingGameId = null
+
     for (const [gameId, game] of activeGames.entries()) {
       if (game.player1.user.userId === user.userId || game.player2.user.userId === user.userId) {
-        console.log(`User ${user.username} is already in game ${gameId}, reconnecting...`)
-
-        // Reconnect to existing game
-        const isPlayer1 = game.player1.user.userId === user.userId
-        const playerData = isPlayer1 ? game.player1 : game.player2
-        const opponentData = isPlayer1 ? game.player2 : game.player1
-
-        // Update socket ID
-        if (isPlayer1) {
-          game.player1.socketId = socket.id
-        } else {
-          game.player2.socketId = socket.id
-        }
-
-        socket.data = { gameId }
-
-        // Send game state to reconnected player
-        socket.emit("color", isPlayer1 ? "white" : "black")
-        socket.emit("opponent", opponentData.user)
-        socket.emit("waiting", false)
-
-        // Notify opponent of reconnection
-        io.to(opponentData.socketId).emit("opponentReconnected", user.username)
-
-        return
+        existingGame = game
+        existingGameId = gameId
+        break
       }
+    }
+
+    if (existingGame) {
+      console.log(`User ${user.username} is already in game ${existingGameId}, reconnecting...`)
+
+      // Reconnect to existing game
+      const isPlayer1 = existingGame.player1.user.userId === user.userId
+      const playerData = isPlayer1 ? existingGame.player1 : existingGame.player2
+      const opponentData = isPlayer1 ? existingGame.player2 : existingGame.player1
+
+      // Update socket ID
+      if (isPlayer1) {
+        existingGame.player1.socketId = socket.id
+      } else {
+        existingGame.player2.socketId = socket.id
+      }
+
+      socket.data = { gameId: existingGameId }
+
+      // Send game state to reconnected player
+      socket.emit("color", isPlayer1 ? "white" : "black")
+      socket.emit("opponent", opponentData.user)
+      socket.emit("waiting", false)
+
+      // Notify opponent of reconnection
+      io.to(opponentData.socketId).emit("opponentReconnected", user.username)
+
+      return
     }
 
     // Add to waiting players if not already in a game
