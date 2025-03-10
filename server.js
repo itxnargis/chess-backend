@@ -23,7 +23,7 @@ const httpServer = createServer(app)
 
 // Allow requests from all origins in production
 const corsOptions = {
-  origin: process.env.NODE_ENV === "production" ? true : ["https://chess-frontend-dun.vercel.app", "http://localhost:5173"],
+  origin: "https://chess-frontend-dun.vercel.app",
   methods: ["GET", "POST", "PUT", "DELETE"],
   credentials: true,
 }
