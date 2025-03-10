@@ -1,3 +1,4 @@
+// This is a modified version of your server.js file with improved socket handling
 
 const { createServer } = require("http")
 const { Server } = require("socket.io")
@@ -12,6 +13,7 @@ const path = require("path")
 dotenv.config()
 const dbConnector = require("./config/connect.js")
 const profileRoutes = require("./routes/profileRoutes.js")
+const { Chess } = require("chess.js")
 
 dbConnector()
 
@@ -21,7 +23,7 @@ const httpServer = createServer(app)
 
 // Allow requests from all origins in production
 const corsOptions = {
-  origin: process.env.NODE_ENV === "production" ? true : ["https://chess-frontend-dun.vercel.app", "http://localhost:5173"],
+  origin: process.env.NODE_ENV === "production" ? true : ["http://localhost:5173", "http://localhost:3000"],
   methods: ["GET", "POST", "PUT", "DELETE"],
   credentials: true,
 }
@@ -31,10 +33,26 @@ app.use(express.json())
 app.use(cookieParser())
 
 const frontendPath = path.resolve(__dirname, "../frontend/dist")
+
 app.use(express.static(frontendPath))
 
 app.use("/user", userRoutes)
 app.use("/profile", restrictToLoginUserOnly, profileRoutes)
+
+app.get("/stockfish", async (req, res) => {
+  try {
+    const apiUrl = "https://stockfish.online/api/s/v2.php"
+    const response = await axios.get(apiUrl, {
+      params: req.query,
+    })
+
+    res.json({
+      bestMove: response.data.bestmove,
+    })
+  } catch (error) {
+    res.status(500).send(`Error: ${error.message}`)
+  }
+})
 
 // Add a health check endpoint
 app.get("/health", (req, res) => {
@@ -75,6 +93,8 @@ io.on("connection", (socket) => {
 
   try {
     const user = socket.handshake.query.user ? JSON.parse(socket.handshake.query.user) : null
+    const lastGameId = socket.handshake.query.lastGameId || null
+
     if (!user || !user.userId) {
       console.error("User not found in handshake query or missing userId")
       socket.emit("error", { message: "Invalid user data" })
@@ -87,11 +107,26 @@ io.on("connection", (socket) => {
     let existingGame = null
     let existingGameId = null
 
-    for (const [gameId, game] of activeGames.entries()) {
-      if (game.player1.user.userId === user.userId || game.player2.user.userId === user.userId) {
-        existingGame = game
-        existingGameId = gameId
-        break
+    // First check if they're reconnecting to a specific game
+    if (lastGameId && activeGames.has(lastGameId)) {
+      existingGame = activeGames.get(lastGameId)
+      existingGameId = lastGameId
+
+      // Verify user is part of this game
+      if (existingGame.player1.user.userId !== user.userId && existingGame.player2.user.userId !== user.userId) {
+        existingGame = null
+        existingGameId = null
+      }
+    }
+
+    // If not found by game ID, search all games
+    if (!existingGame) {
+      for (const [gameId, game] of activeGames.entries()) {
+        if (game.player1.user.userId === user.userId || game.player2.user.userId === user.userId) {
+          existingGame = game
+          existingGameId = gameId
+          break
+        }
       }
     }
 
@@ -116,8 +151,9 @@ io.on("connection", (socket) => {
       socket.emit("color", isPlayer1 ? "white" : "black")
       socket.emit("opponent", opponentData.user)
       socket.emit("waiting", false)
+      socket.emit("gameAssigned", existingGameId)
 
-      // Send current game state (FEN) to the reconnected player
+      // Send current game state (FEN)
       if (existingGame.currentFen) {
         socket.emit("gameState", existingGame.currentFen)
       }
@@ -166,13 +202,17 @@ io.on("connection", (socket) => {
       // Create a game ID
       const gameId = `game_${Date.now()}_${player1.user.userId}_${player2.user.userId}`
 
+      // Initialize a chess game
+      const chess = new Chess()
+
       // Store game info
       activeGames.set(gameId, {
         player1: player1,
         player2: player2,
         moves: [],
         startTime: Date.now(),
-        currentFen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", // Initial position
+        currentFen: chess.fen(),
+        chess: chess,
       })
 
       // Associate players with this game
@@ -188,6 +228,10 @@ io.on("connection", (socket) => {
 
       io.to(player1.socketId).emit("opponent", player2.user)
       io.to(player2.socketId).emit("opponent", player1.user)
+
+      // Send game ID to both players
+      io.to(player1.socketId).emit("gameAssigned", gameId)
+      io.to(player2.socketId).emit("gameAssigned", gameId)
 
       // Update waiting status
       io.to(player1.socketId).emit("waiting", false)
@@ -206,29 +250,55 @@ io.on("connection", (socket) => {
       socket.emit("waitingCount", waitingPlayers.length)
     })
 
-    // Handle moves with improved validation and acknowledgement
-    socket.on("move", (moveData, callback) => {
+    // Handle moves with improved validation
+    socket.on("move", (moveData) => {
       const gameId = socket.data?.gameId
       if (!gameId) {
         console.error("Move received but player is not in a game")
-        if (callback) callback({ success: false, error: "You are not in a game" })
-        else socket.emit("error", { message: "You are not in a game" })
+        socket.emit("error", { message: "You are not in a game" })
         return
       }
 
       const game = activeGames.get(gameId)
       if (!game) {
         console.error("Game not found:", gameId)
-        if (callback) callback({ success: false, error: "Game not found" })
-        else socket.emit("error", { message: "Game not found" })
+        socket.emit("error", { message: "Game not found" })
         return
       }
 
       // Validate move data
       if (!moveData || !moveData.from || !moveData.to) {
         console.error("Invalid move data:", moveData)
-        if (callback) callback({ success: false, error: "Invalid move data" })
-        else socket.emit("error", { message: "Invalid move data" })
+        socket.emit("error", { message: "Invalid move data" })
+        return
+      }
+
+      // Update the server-side chess game
+      try {
+        if (moveData.fen) {
+          // If FEN is provided, use it to sync game state
+          game.chess.load(moveData.fen)
+          game.currentFen = moveData.fen
+        } else {
+          // Otherwise make the move on the server
+          const move = game.chess.move({
+            from: moveData.from,
+            to: moveData.to,
+            promotion: moveData.obtainedPromotion || "q",
+          })
+
+          if (move) {
+            game.currentFen = game.chess.fen()
+            moveData.fen = game.currentFen // Add FEN to the move data
+          } else {
+            console.error("Invalid move:", moveData)
+            socket.emit("error", { message: "Invalid move" })
+            return
+          }
+        }
+      } catch (error) {
+        console.error("Error processing move:", error)
+        socket.emit("error", { message: "Error processing move" })
         return
       }
 
@@ -239,29 +309,49 @@ io.on("connection", (socket) => {
         player: socket.id === game.player1.socketId ? "player1" : "player2",
       })
 
-      // Update current FEN if provided
-      if (moveData.fen) {
-        game.currentFen = moveData.fen
-      }
-
       // Forward the move to the opponent
       const isPlayer1 = game.player1.socketId === socket.id
       const opponentSocketId = isPlayer1 ? game.player2.socketId : game.player1.socketId
 
       io.to(opponentSocketId).emit("move", moveData)
 
-      // Send acknowledgement if callback provided
-      if (callback) callback({ success: true })
+      // Check for game over conditions
+      if (game.chess.isGameOver()) {
+        const result = {
+          isCheckmate: game.chess.isCheckmate(),
+          isDraw: game.chess.isDraw(),
+          winner: game.chess.isCheckmate() ? (game.chess.turn() === "w" ? "black" : "white") : null,
+        }
+
+        // Emit game over event to both players
+        io.to(game.player1.socketId).emit("gameOver", result)
+        io.to(game.player2.socketId).emit("gameOver", result)
+
+        // Keep the game active for a short period for viewing the final position
+        setTimeout(() => {
+          activeGames.delete(gameId)
+          console.log(`Game ${gameId} ended and removed after timeout`)
+        }, 60000) // 1 minute timeout
+      }
     })
 
-    // Handle game state requests
+    // Handle request for current game state
     socket.on("requestGameState", () => {
       const gameId = socket.data?.gameId
-      if (!gameId) return
+      if (!gameId) {
+        console.error("Game state requested but player is not in a game")
+        socket.emit("error", { message: "You are not in a game" })
+        return
+      }
 
       const game = activeGames.get(gameId)
-      if (!game || !game.currentFen) return
+      if (!game) {
+        console.error("Game not found:", gameId)
+        socket.emit("error", { message: "Game not found" })
+        return
+      }
 
+      // Send current FEN to the requesting client
       socket.emit("gameState", game.currentFen)
     })
 
@@ -276,7 +366,30 @@ io.on("connection", (socket) => {
       }
     })
 
-    // Handle disconnection with improved reconnection window
+    // Handle player left event
+    socket.on("playerLeft", (data) => {
+      console.log("Player left:", data)
+
+      if (data.opponentId) {
+        // Find the opponent's socket
+        const opponentSocket = Array.from(io.sockets.sockets.values()).find(
+          (s) => s.handshake.query.user && JSON.parse(s.handshake.query.user).userId === data.opponentId,
+        )
+
+        if (opponentSocket) {
+          opponentSocket.emit("opponentDisconnected", data.username)
+        }
+      }
+
+      // Remove the game if it exists
+      const gameId = socket.data?.gameId
+      if (gameId && activeGames.has(gameId)) {
+        console.log(`Removing game ${gameId} due to player leaving`)
+        activeGames.delete(gameId)
+      }
+    })
+
+    // Handle disconnection
     socket.on("disconnect", () => {
       console.log(`User disconnected: ${socket.id}`)
 
@@ -293,37 +406,24 @@ io.on("connection", (socket) => {
       if (gameId) {
         const game = activeGames.get(gameId)
         if (game) {
-          // Determine which player disconnected
+          // Notify opponent
           const isPlayer1 = game.player1.socketId === socket.id
           const opponentSocketId = isPlayer1 ? game.player2.socketId : game.player1.socketId
           const disconnectedUser = isPlayer1 ? game.player1.user : game.player2.user
-          const opponentUser = isPlayer1 ? game.player2.user : game.player1.user
 
           console.log(`Player ${disconnectedUser.username} disconnected from game ${gameId}`)
 
-          // Mark the player as disconnected but keep the game active for a reconnection window
-          if (isPlayer1) {
-            game.player1.disconnectedAt = Date.now()
-          } else {
-            game.player2.disconnectedAt = Date.now()
-          }
-
-          // Set a timer to check for reconnection
+          // Keep the game active for a short period to allow reconnection
           setTimeout(() => {
             const updatedGame = activeGames.get(gameId)
-            if (!updatedGame) return // Game was already removed
-
-            const disconnectedPlayer = isPlayer1 ? updatedGame.player1 : updatedGame.player2
-
-            // If the player hasn't reconnected within the grace period (30 seconds)
-            if (disconnectedPlayer.disconnectedAt && Date.now() - disconnectedPlayer.disconnectedAt > 30000) {
-              console.log(`Player ${disconnectedUser.username} did not reconnect within grace period`)
-
-              // Notify opponent of the win due to disconnection
-              io.to(opponentSocketId).emit("opponentDisconnected", disconnectedUser.username)
-
-              // Remove the game
-              activeGames.delete(gameId)
+            if (updatedGame) {
+              // Check if the player has reconnected
+              const currentSocketId = isPlayer1 ? updatedGame.player1.socketId : updatedGame.player2.socketId
+              if (currentSocketId === socket.id) {
+                console.log(`Player ${disconnectedUser.username} did not reconnect, ending game ${gameId}`)
+                io.to(opponentSocketId).emit("opponentDisconnected", disconnectedUser.username)
+                activeGames.delete(gameId)
+              }
             }
           }, 30000) // 30 second grace period for reconnection
         }
