@@ -6,6 +6,8 @@ router.post('/register', userController.register);
 
 router.post('/login', userController.login);
 
+router.post("/logout", userController.logout)
+
 router.get('/:userId', userController.getUserById);
 
 router.post('/:userId/match-history', userController.addMatchToHistory);

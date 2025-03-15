@@ -1,20 +1,29 @@
-require("dotenv").config();
-const jwt = require("jsonwebtoken");
+// Update your auth service to handle token verification more robustly
 
-const secret = process.env.JWT_SECRET;
+require("dotenv").config()
+const jwt = require("jsonwebtoken")
+
+const secret = process.env.JWT_SECRET
 
 function getUser(token) {
-    if (!token) {
-        console.error("❌ No token provided");
-        return null;
+  if (!token) {
+    console.error("❌ No token provided")
+    return null
+  }
+
+  try {
+    return jwt.verify(token, secret)
+  } catch (error) {
+    console.error("❌ Token verification error:", error.message)
+
+    // Check if token is expired
+    if (error.name === "TokenExpiredError") {
+      console.error("❌ Token has expired")
     }
 
-    try {
-        return jwt.verify(token, secret);
-    } catch (error) {
-        console.error("❌ Token verification error:", error.message);
-        return null;
-    }
+    return null
+  }
 }
 
-module.exports = { getUser };
+module.exports = { getUser }
+

@@ -76,6 +76,20 @@ const login = async (req, res) => {
     }
   };
 
+  const logout = async (req, res) => {
+    try {
+      res.clearCookie("token", {
+        httpOnly: true,
+        secure: true,
+        sameSite: "none",
+      })
+  
+      res.status(200).json({ message: "Logged out successfully" })
+    } catch (err) {
+      res.status(500).json({ error: err.message })
+    }
+  }
+
 const getUserById = async (req, res) => {
     const { userId } = req.params;
 
@@ -139,5 +153,6 @@ module.exports = {
     login,
     getUserById,
     addMatchToHistory,
-    getMatchHistory
+    getMatchHistory,
+    logout,
 };
