@@ -20,7 +20,7 @@ const app = express()
 const httpServer = createServer(app)
 
 const corsOptions = {
-  origin: "http://localhost:5173",
+  origin: "https://chess-frontend-dun.vercel.app",
   methods: ["GET", "POST", "PUT", "DELETE"],
   credentials: true,
 }
