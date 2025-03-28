@@ -1,4 +1,4 @@
-
+// Fix the auth middleware to properly handle the token
 const { getUser } = require("../services/auth")
 
 async function restrictToLoginUserOnly(req, res, next) {
@@ -15,6 +15,9 @@ async function restrictToLoginUserOnly(req, res, next) {
       console.error("Invalid token or user not found")
       return res.status(403).json({ error: "Invalid token. Please log in again." })
     }
+
+    // Log successful authentication
+    console.log(`User authenticated: ${user.username} (${user.userId})`)
 
     req.user = user
     next()

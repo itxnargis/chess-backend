@@ -23,6 +23,7 @@ const corsOptions = {
   origin: "https://chess-frontend-dun.vercel.app",
   methods: ["GET", "POST", "PUT", "DELETE"],
   credentials: true,
+  allowedHeaders: ["Content-Type", "Authorization"],
 }
 
 app.use(cors(corsOptions))
