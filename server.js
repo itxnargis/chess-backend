@@ -20,7 +20,10 @@ const app = express()
 const httpServer = createServer(app)
 
 const corsOptions = {
-  origin: "https://chess-frontend-dun.vercel.app",
+  origin:
+    process.env.NODE_ENV === "production"
+      ? true // Allow requests from any origin in production
+      : "https://chess-frontend-dun.vercel.app/", // Restrict in development
   methods: ["GET", "POST", "PUT", "DELETE"],
   credentials: true,
   allowedHeaders: ["Content-Type", "Authorization"],
@@ -57,7 +60,7 @@ app.get("/health", (req, res) => {
 })
 
 app.get("*", (req, res) => {
-  res.sendFile(path.join(frontendPath, "index.html"))
+  res.sendFile(path.join(frontendPath, "index.html"));
 })
 
 const io = new Server(httpServer, {

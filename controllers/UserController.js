@@ -85,8 +85,9 @@ const login = async (req, res) => {
     res.cookie("token", token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
-      sameSite: "lax", // Changed from 'none' to 'lax' for better compatibility
-      maxAge: 4 * 60 * 60 * 1000, // 4 hours in milliseconds
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax", // Important for cross-site cookies in production
+      maxAge: 24 * 60 * 60 * 1000, // 24 hours in milliseconds
+      path: "/", // Ensure cookie is available across the entire site
     })
 
     // Return both token and user data
@@ -100,9 +101,16 @@ const login = async (req, res) => {
 }
 
 const logout = (req, res) => {
-  res.clearCookie("token")
+  res.clearCookie("token", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+    path: "/",
+  })
+
   res.status(200).json({ message: "Logged out successfully" })
 }
+
 const getUserProfile = async (req, res) => {
   try {
     const userId = req.userId // Extracted from the auth middleware
