@@ -71,6 +71,8 @@ const io = new Server(httpServer, {
 
 let waitingPlayers = []
 const activeGames = new Map()
+const playerGameMap = new Map() // Map to track which game a player is in
+const playerTimeouts = new Map() // Map to track player inactivity timeouts
 
 const logServerState = () => {
   console.log(`[SERVER STATE] Waiting players: ${waitingPlayers.length}, Active games: ${activeGames.size}`)
@@ -81,6 +83,55 @@ const logServerState = () => {
   }
 }
 
+// Clean up stale games and waiting players
+const cleanupStaleEntities = () => {
+  const now = Date.now()
+  
+  // Clean up stale games
+  for (const [gameId, game] of activeGames.entries()) {
+    // Remove games older than 3 hours
+    if (now - game.startTime > 3 * 60 * 60 * 1000) {
+      console.log(`Removing stale game ${gameId}`)
+      
+      // Notify players if they're still connected
+      if (io.sockets.sockets.has(game.player1.socketId)) {
+        io.to(game.player1.socketId).emit("gameExpired")
+      }
+      
+      if (io.sockets.sockets.has(game.player2.socketId)) {
+        io.to(game.player2.socketId).emit("gameExpired")
+      }
+      
+      // Remove from player game map
+      if (game.player1.user.userId) {
+        playerGameMap.delete(game.player1.user.userId)
+      }
+      
+      if (game.player2.user.userId) {
+        playerGameMap.delete(game.player2.user.userId)
+      }
+      
+      activeGames.delete(gameId)
+    }
+  }
+  
+  // Clean up stale waiting players (waiting for more than 30 minutes)
+  waitingPlayers = waitingPlayers.filter(player => {
+    const isStale = now - player.joinedAt > 30 * 60 * 1000
+    if (isStale) {
+      console.log(`Removing stale waiting player: ${player.user.username}`)
+      if (io.sockets.sockets.has(player.socketId)) {
+        io.to(player.socketId).emit("waitingExpired")
+      }
+    }
+    return !isStale
+  })
+}
+
+// Run cleanup every 15 minutes
+setInterval(cleanupStaleEntities, 15 * 60 * 1000)
+
+// Log server state every minute
 setInterval(logServerState, 60000)
 
 io.on("connection", (socket) => {
@@ -98,29 +149,47 @@ io.on("connection", (socket) => {
 
     console.log(`User ${user.username} (${user.userId}) connected with socket ${socket.id}`)
 
+    // Check if user is already in a game (reconnection)
     let existingGame = null
     let existingGameId = null
 
+    // First check if the user provided a lastGameId
     if (lastGameId && activeGames.has(lastGameId)) {
       existingGame = activeGames.get(lastGameId)
       existingGameId = lastGameId
 
+      // Verify the user is actually part of this game
       if (existingGame.player1.user.userId !== user.userId && existingGame.player2.user.userId !== user.userId) {
         existingGame = null
         existingGameId = null
       }
     }
 
+    // If no game found by ID, check if user is in any active game
     if (!existingGame) {
-      for (const [gameId, game] of activeGames.entries()) {
-        if (game.player1.user.userId === user.userId || game.player2.user.userId === user.userId) {
-          existingGame = game
-          existingGameId = gameId
-          break
+      // Check the player-game map first (more efficient)
+      if (playerGameMap.has(user.userId)) {
+        existingGameId = playerGameMap.get(user.userId)
+        if (activeGames.has(existingGameId)) {
+          existingGame = activeGames.get(existingGameId)
+        }
+      }
+      
+      // Fallback: search all games (less efficient)
+      if (!existingGame) {
+        for (const [gameId, game] of activeGames.entries()) {
+          if (game.player1.user.userId === user.userId || game.player2.user.userId === user.userId) {
+            existingGame = game
+            existingGameId = gameId
+            // Update the player-game map
+            playerGameMap.set(user.userId, gameId)
+            break
+          }
         }
       }
     }
 
+    // Handle reconnection to existing game
     if (existingGame) {
       console.log(`User ${user.username} is already in game ${existingGameId}, reconnecting...`)
 
@@ -128,6 +197,7 @@ io.on("connection", (socket) => {
       const playerData = isPlayer1 ? existingGame.player1 : existingGame.player2
       const opponentData = isPlayer1 ? existingGame.player2 : existingGame.player1
 
+      // Update socket ID
       if (isPlayer1) {
         existingGame.player1.socketId = socket.id
       } else {
@@ -136,6 +206,7 @@ io.on("connection", (socket) => {
 
       socket.data = { gameId: existingGameId }
 
+      // Send game state to reconnected player
       socket.emit("color", isPlayer1 ? "white" : "black")
       socket.emit("opponent", opponentData.user)
       socket.emit("waiting", false)
@@ -145,22 +216,27 @@ io.on("connection", (socket) => {
         socket.emit("gameState", existingGame.currentFen)
       }
 
+      // Notify opponent of reconnection
       io.to(opponentData.socketId).emit("opponentReconnected", user.username)
+
+      // Clear any inactivity timeout for this player
+      if (playerTimeouts.has(user.userId)) {
+        clearTimeout(playerTimeouts.get(user.userId))
+        playerTimeouts.delete(user.userId)
+      }
 
       return
     }
 
-    const existingPlayerIndex = waitingPlayers.findIndex((p) => p.user.userId === user.userId)
-    if (existingPlayerIndex !== -1) {
-      console.log(`Updating socket ID for waiting player ${user.username}`)
-      waitingPlayers[existingPlayerIndex].socketId = socket.id
-    } else {
-      waitingPlayers.push({
-        socketId: socket.id,
-        user: user,
-        joinedAt: Date.now(),
-      })
-    }
+    // Remove user from any existing waiting queue entries
+    waitingPlayers = waitingPlayers.filter(p => p.user.userId !== user.userId)
+
+    // Add to waiting queue
+    waitingPlayers.push({
+      socketId: socket.id,
+      user: user,
+      joinedAt: Date.now(),
+    })
 
     console.log(`Waiting players: ${waitingPlayers.length}`)
     logServerState()
@@ -168,11 +244,14 @@ io.on("connection", (socket) => {
     socket.emit("waiting", true)
     socket.emit("waitingCount", waitingPlayers.length)
 
+    // Update all waiting players with new count
     waitingPlayers.forEach((player) => {
       io.to(player.socketId).emit("waitingCount", waitingPlayers.length)
     })
 
+    // Match players if we have enough
     if (waitingPlayers.length >= 2) {
+      // Sort by join time to ensure fairness
       waitingPlayers.sort((a, b) => a.joinedAt - b.joinedAt)
 
       const player1 = waitingPlayers.shift()
@@ -188,9 +267,14 @@ io.on("connection", (socket) => {
         player2: player2,
         moves: [],
         startTime: Date.now(),
+        lastMoveTime: Date.now(),
         currentFen: chess.fen(),
         chess: chess,
       })
+
+      // Update player-game map
+      playerGameMap.set(player1.user.userId, gameId)
+      playerGameMap.set(player2.user.userId, gameId)
 
       const player1Socket = io.sockets.sockets.get(player1.socketId)
       const player2Socket = io.sockets.sockets.get(player2.socketId)
@@ -210,6 +294,7 @@ io.on("connection", (socket) => {
       io.to(player1.socketId).emit("waiting", false)
       io.to(player2.socketId).emit("waiting", false)
 
+      // Update remaining waiting players with new count
       waitingPlayers.forEach((player) => {
         io.to(player.socketId).emit("waitingCount", waitingPlayers.length)
       })
@@ -217,10 +302,12 @@ io.on("connection", (socket) => {
       logServerState()
     }
 
+    // Handle waiting count requests
     socket.on("getWaitingCount", () => {
       socket.emit("waitingCount", waitingPlayers.length)
     })
 
+    // Handle move events
     socket.on("move", (moveData) => {
       const gameId = socket.data?.gameId
       if (!gameId) {
@@ -268,6 +355,9 @@ io.on("connection", (socket) => {
         return
       }
 
+      // Update last move time
+      game.lastMoveTime = Date.now()
+
       game.moves.push({
         ...moveData,
         timestamp: Date.now(),
@@ -289,13 +379,26 @@ io.on("connection", (socket) => {
         io.to(game.player1.socketId).emit("gameOver", result)
         io.to(game.player2.socketId).emit("gameOver", result)
 
+        // Clean up game after a delay
         setTimeout(() => {
-          activeGames.delete(gameId)
-          console.log(`Game ${gameId} ended and removed after timeout`)
+          if (activeGames.has(gameId)) {
+            // Remove from player game map
+            if (game.player1.user.userId) {
+              playerGameMap.delete(game.player1.user.userId)
+            }
+            
+            if (game.player2.user.userId) {
+              playerGameMap.delete(game.player2.user.userId)
+            }
+            
+            activeGames.delete(gameId)
+            console.log(`Game ${gameId} ended and removed after timeout`)
+          }
         }, 60000) 
       }
     })
 
+    // Handle game state requests
     socket.on("requestGameState", () => {
       const gameId = socket.data?.gameId
       if (!gameId) {
@@ -314,16 +417,29 @@ io.on("connection", (socket) => {
       socket.emit("gameState", game.currentFen)
     })
 
+    // Handle match completion
     socket.on("matchCompleted", (result) => {
       console.log("Match completed:", result)
       const gameId = socket.data?.gameId
 
       if (gameId && activeGames.has(gameId)) {
+        const game = activeGames.get(gameId)
+        
+        // Remove from player game map
+        if (game.player1.user.userId) {
+          playerGameMap.delete(game.player1.user.userId)
+        }
+        
+        if (game.player2.user.userId) {
+          playerGameMap.delete(game.player2.user.userId)
+        }
+        
         console.log(`Removing completed game ${gameId}`)
         activeGames.delete(gameId)
       }
     })
 
+    // Handle player leaving
     socket.on("playerLeft", (data) => {
       console.log("Player left:", data)
 
@@ -339,20 +455,35 @@ io.on("connection", (socket) => {
 
       const gameId = socket.data?.gameId
       if (gameId && activeGames.has(gameId)) {
+        const game = activeGames.get(gameId)
+        
+        // Remove from player game map
+        if (game.player1.user.userId) {
+          playerGameMap.delete(game.player1.user.userId)
+        }
+        
+        if (game.player2.user.userId) {
+          playerGameMap.delete(game.player2.user.userId)
+        }
+        
         console.log(`Removing game ${gameId} due to player leaving`)
         activeGames.delete(gameId)
       }
     })
 
+    // Handle disconnection
     socket.on("disconnect", () => {
       console.log(`User disconnected: ${socket.id}`)
 
+      // Remove from waiting players
       waitingPlayers = waitingPlayers.filter((p) => p.socketId !== socket.id)
 
+      // Update waiting count for remaining players
       waitingPlayers.forEach((player) => {
         io.to(player.socketId).emit("waitingCount", waitingPlayers.length)
       })
 
+      // Handle game disconnection
       const gameId = socket.data?.gameId
       if (gameId) {
         const game = activeGames.get(gameId)
@@ -363,17 +494,38 @@ io.on("connection", (socket) => {
 
           console.log(`Player ${disconnectedUser.username} disconnected from game ${gameId}`)
 
-          setTimeout(() => {
+          // Set a timeout to handle if player doesn't reconnect
+          const timeoutId = setTimeout(() => {
             const updatedGame = activeGames.get(gameId)
             if (updatedGame) {
               const currentSocketId = isPlayer1 ? updatedGame.player1.socketId : updatedGame.player2.socketId
               if (currentSocketId === socket.id) {
-                console.log(`Player ${disconnectedUser.username} did not reconnect, ending game ${gameId}`)
+                console.log(`Player ${disconnectedUser.username} did not reconnect within timeout, ending game ${gameId}`)
                 io.to(opponentSocketId).emit("opponentDisconnected", disconnectedUser.username)
+                
+                // Remove from player game map
+                if (updatedGame.player1.user.userId) {
+                  playerGameMap.delete(updatedGame.player1.user.userId)
+                }
+                
+                if (updatedGame.player2.user.userId) {
+                  playerGameMap.delete(updatedGame.player2.user.userId)
+                }
+                
                 activeGames.delete(gameId)
               }
             }
-          }, 30000) 
+            
+            // Remove the timeout from the map
+            if (disconnectedUser.userId) {
+              playerTimeouts.delete(disconnectedUser.userId)
+            }
+          }, 15000) // 15 seconds timeout as requested
+          
+          // Store the timeout
+          if (disconnectedUser.userId) {
+            playerTimeouts.set(disconnectedUser.userId, timeoutId)
+          }
         }
       }
 
@@ -384,19 +536,6 @@ io.on("connection", (socket) => {
     socket.emit("error", { message: "Server error" })
   }
 })
-
-setInterval(
-  () => {
-    const now = Date.now()
-    for (const [gameId, game] of activeGames.entries()) {
-      if (now - game.startTime > 3 * 60 * 60 * 1000) {
-        console.log(`Removing stale game ${gameId}`)
-        activeGames.delete(gameId)
-      }
-    }
-  },
-  15 * 60 * 1000,
-) 
 
 httpServer.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`)
