@@ -26,7 +26,7 @@ const corsOptions = {
       : "https://chess-frontend-dun.vercel.app/", // Restrict in development
   methods: ["GET", "POST", "PUT", "DELETE"],
   credentials: true,
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: ["Content-Type", "Authorization"],  
 }
 
 app.use(cors(corsOptions))
@@ -60,13 +60,13 @@ app.get("/health", (req, res) => {
 })
 
 app.get("*", (req, res) => {
-  res.sendFile(path.join(frontendPath, "index.html"));
+  res.sendFile(path.join(frontendPath, "index.html"))
 })
 
 const io = new Server(httpServer, {
   cors: corsOptions,
-  pingTimeout: 60000, 
-  pingInterval: 25000, 
+  pingTimeout: 60000,
+  pingInterval: 25000,
 })
 
 let waitingPlayers = []
@@ -86,37 +86,37 @@ const logServerState = () => {
 // Clean up stale games and waiting players
 const cleanupStaleEntities = () => {
   const now = Date.now()
-  
+
   // Clean up stale games
   for (const [gameId, game] of activeGames.entries()) {
     // Remove games older than 3 hours
     if (now - game.startTime > 3 * 60 * 60 * 1000) {
       console.log(`Removing stale game ${gameId}`)
-      
+
       // Notify players if they're still connected
       if (io.sockets.sockets.has(game.player1.socketId)) {
         io.to(game.player1.socketId).emit("gameExpired")
       }
-      
+
       if (io.sockets.sockets.has(game.player2.socketId)) {
         io.to(game.player2.socketId).emit("gameExpired")
       }
-      
+
       // Remove from player game map
       if (game.player1.user.userId) {
         playerGameMap.delete(game.player1.user.userId)
       }
-      
+
       if (game.player2.user.userId) {
         playerGameMap.delete(game.player2.user.userId)
       }
-      
+
       activeGames.delete(gameId)
     }
   }
-  
+
   // Clean up stale waiting players (waiting for more than 30 minutes)
-  waitingPlayers = waitingPlayers.filter(player => {
+  waitingPlayers = waitingPlayers.filter((player) => {
     const isStale = now - player.joinedAt > 30 * 60 * 1000
     if (isStale) {
       console.log(`Removing stale waiting player: ${player.user.username}`)
@@ -174,7 +174,7 @@ io.on("connection", (socket) => {
           existingGame = activeGames.get(existingGameId)
         }
       }
-      
+
       // Fallback: search all games (less efficient)
       if (!existingGame) {
         for (const [gameId, game] of activeGames.entries()) {
@@ -229,7 +229,7 @@ io.on("connection", (socket) => {
     }
 
     // Remove user from any existing waiting queue entries
-    waitingPlayers = waitingPlayers.filter(p => p.user.userId !== user.userId)
+    waitingPlayers = waitingPlayers.filter((p) => p.user.userId !== user.userId)
 
     // Add to waiting queue
     waitingPlayers.push({
@@ -330,10 +330,14 @@ io.on("connection", (socket) => {
       }
 
       try {
+        // Always update the chess instance with the move
         if (moveData.fen) {
+          // If FEN is provided, use it to sync game state
           game.chess.load(moveData.fen)
           game.currentFen = moveData.fen
+          console.log("Game state updated with FEN:", moveData.fen)
         } else {
+          // Otherwise make the move normally
           const move = game.chess.move({
             from: moveData.from,
             to: moveData.to,
@@ -342,59 +346,69 @@ io.on("connection", (socket) => {
 
           if (move) {
             game.currentFen = game.chess.fen()
-            moveData.fen = game.currentFen 
+            moveData.fen = game.currentFen // Add FEN to moveData for the opponent
+            console.log("Move made, updated FEN:", game.currentFen)
           } else {
             console.error("Invalid move:", moveData)
             socket.emit("error", { message: "Invalid move" })
             return
           }
         }
+
+        // Update last move time
+        game.lastMoveTime = Date.now()
+
+        // Add move to game history
+        game.moves.push({
+          ...moveData,
+          timestamp: Date.now(),
+          player: socket.id === game.player1.socketId ? "player1" : "player2",
+        })
+
+        // Determine which player made the move and send to opponent
+        const isPlayer1 = game.player1.socketId === socket.id
+        const opponentSocketId = isPlayer1 ? game.player2.socketId : game.player1.socketId
+
+        // Make sure the FEN is included in the move data sent to the opponent
+        if (!moveData.fen) {
+          moveData.fen = game.currentFen
+        }
+
+        // Send move to opponent with FEN for state synchronization
+        console.log(`Sending move to opponent (${opponentSocketId}):`, moveData)
+        io.to(opponentSocketId).emit("move", moveData)
+
+        // Check if game is over
+        if (game.chess.isGameOver()) {
+          const result = {
+            isCheckmate: game.chess.isCheckmate(),
+            isDraw: game.chess.isDraw(),
+            winner: game.chess.isCheckmate() ? (game.chess.turn() === "w" ? "black" : "white") : null,
+          }
+
+          io.to(game.player1.socketId).emit("gameOver", result)
+          io.to(game.player2.socketId).emit("gameOver", result)
+
+          // Clean up game after a delay
+          setTimeout(() => {
+            if (activeGames.has(gameId)) {
+              // Remove from player game map
+              if (game.player1.user.userId) {
+                playerGameMap.delete(game.player1.user.userId)
+              }
+
+              if (game.player2.user.userId) {
+                playerGameMap.delete(game.player2.user.userId)
+              }
+
+              activeGames.delete(gameId)
+              console.log(`Game ${gameId} ended and removed after timeout`)
+            }
+          }, 60000)
+        }
       } catch (error) {
         console.error("Error processing move:", error)
         socket.emit("error", { message: "Error processing move" })
-        return
-      }
-
-      // Update last move time
-      game.lastMoveTime = Date.now()
-
-      game.moves.push({
-        ...moveData,
-        timestamp: Date.now(),
-        player: socket.id === game.player1.socketId ? "player1" : "player2",
-      })
-
-      const isPlayer1 = game.player1.socketId === socket.id
-      const opponentSocketId = isPlayer1 ? game.player2.socketId : game.player1.socketId
-
-      io.to(opponentSocketId).emit("move", moveData)
-
-      if (game.chess.isGameOver()) {
-        const result = {
-          isCheckmate: game.chess.isCheckmate(),
-          isDraw: game.chess.isDraw(),
-          winner: game.chess.isCheckmate() ? (game.chess.turn() === "w" ? "black" : "white") : null,
-        }
-
-        io.to(game.player1.socketId).emit("gameOver", result)
-        io.to(game.player2.socketId).emit("gameOver", result)
-
-        // Clean up game after a delay
-        setTimeout(() => {
-          if (activeGames.has(gameId)) {
-            // Remove from player game map
-            if (game.player1.user.userId) {
-              playerGameMap.delete(game.player1.user.userId)
-            }
-            
-            if (game.player2.user.userId) {
-              playerGameMap.delete(game.player2.user.userId)
-            }
-            
-            activeGames.delete(gameId)
-            console.log(`Game ${gameId} ended and removed after timeout`)
-          }
-        }, 60000) 
       }
     })
 
@@ -424,16 +438,16 @@ io.on("connection", (socket) => {
 
       if (gameId && activeGames.has(gameId)) {
         const game = activeGames.get(gameId)
-        
+
         // Remove from player game map
         if (game.player1.user.userId) {
           playerGameMap.delete(game.player1.user.userId)
         }
-        
+
         if (game.player2.user.userId) {
           playerGameMap.delete(game.player2.user.userId)
         }
-        
+
         console.log(`Removing completed game ${gameId}`)
         activeGames.delete(gameId)
       }
@@ -456,16 +470,16 @@ io.on("connection", (socket) => {
       const gameId = socket.data?.gameId
       if (gameId && activeGames.has(gameId)) {
         const game = activeGames.get(gameId)
-        
+
         // Remove from player game map
         if (game.player1.user.userId) {
           playerGameMap.delete(game.player1.user.userId)
         }
-        
+
         if (game.player2.user.userId) {
           playerGameMap.delete(game.player2.user.userId)
         }
-        
+
         console.log(`Removing game ${gameId} due to player leaving`)
         activeGames.delete(gameId)
       }
@@ -500,28 +514,30 @@ io.on("connection", (socket) => {
             if (updatedGame) {
               const currentSocketId = isPlayer1 ? updatedGame.player1.socketId : updatedGame.player2.socketId
               if (currentSocketId === socket.id) {
-                console.log(`Player ${disconnectedUser.username} did not reconnect within timeout, ending game ${gameId}`)
+                console.log(
+                  `Player ${disconnectedUser.username} did not reconnect within timeout, ending game ${gameId}`,
+                )
                 io.to(opponentSocketId).emit("opponentDisconnected", disconnectedUser.username)
-                
+
                 // Remove from player game map
                 if (updatedGame.player1.user.userId) {
                   playerGameMap.delete(updatedGame.player1.user.userId)
                 }
-                
+
                 if (updatedGame.player2.user.userId) {
                   playerGameMap.delete(updatedGame.player2.user.userId)
                 }
-                
+
                 activeGames.delete(gameId)
               }
             }
-            
+
             // Remove the timeout from the map
             if (disconnectedUser.userId) {
               playerTimeouts.delete(disconnectedUser.userId)
             }
           }, 15000) // 15 seconds timeout as requested
-          
+
           // Store the timeout
           if (disconnectedUser.userId) {
             playerTimeouts.set(disconnectedUser.userId, timeoutId)
@@ -540,4 +556,3 @@ io.on("connection", (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`)
 })
-
