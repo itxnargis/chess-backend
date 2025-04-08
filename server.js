@@ -26,7 +26,7 @@ const corsOptions = {
       : "https://chess-frontend-dun.vercel.app/", // Restrict in development
   methods: ["GET", "POST", "PUT", "DELETE"],
   credentials: true,
-  allowedHeaders: ["Content-Type", "Authorization"],  
+  allowedHeaders: ["Content-Type", "Authorization"],
 }
 
 app.use(cors(corsOptions))
@@ -212,8 +212,13 @@ io.on("connection", (socket) => {
       socket.emit("waiting", false)
       socket.emit("gameAssigned", existingGameId)
 
+      // Make sure to send the current game state
       if (existingGame.currentFen) {
+        // Send immediately and then again after a short delay to ensure it's received
         socket.emit("gameState", existingGame.currentFen)
+        setTimeout(() => {
+          socket.emit("gameState", existingGame.currentFen)
+        }, 1000)
       }
 
       // Notify opponent of reconnection
@@ -377,6 +382,11 @@ io.on("connection", (socket) => {
         // Send move to opponent with FEN for state synchronization
         console.log(`Sending move to opponent (${opponentSocketId}):`, moveData)
         io.to(opponentSocketId).emit("move", moveData)
+
+        // Also send the current game state to ensure both players are in sync
+        setTimeout(() => {
+          io.to(opponentSocketId).emit("gameState", game.currentFen)
+        }, 500)
 
         // Check if game is over
         if (game.chess.isGameOver()) {
