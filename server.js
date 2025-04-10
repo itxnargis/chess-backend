@@ -12,6 +12,7 @@ dotenv.config()
 const dbConnector = require("./config/connect.js")
 const profileRoutes = require("./routes/profileRoutes.js")
 const { Chess } = require("chess.js")
+const User = require("./models/userModel")
 
 dbConnector()
 
@@ -60,13 +61,13 @@ app.get("/health", (req, res) => {
 })
 
 app.get("*", (req, res) => {
-  res.sendFile(path.join(frontendPath, "index.html"));
+  res.sendFile(path.join(frontendPath, "index.html"))
 })
 
 const io = new Server(httpServer, {
   cors: corsOptions,
-  pingTimeout: 60000, 
-  pingInterval: 25000, 
+  pingTimeout: 60000,
+  pingInterval: 25000,
 })
 
 let waitingPlayers = []
@@ -255,7 +256,7 @@ io.on("connection", (socket) => {
 
           if (move) {
             game.currentFen = game.chess.fen()
-            moveData.fen = game.currentFen 
+            moveData.fen = game.currentFen
           } else {
             console.error("Invalid move:", moveData)
             socket.emit("error", { message: "Invalid move" })
@@ -289,12 +290,63 @@ io.on("connection", (socket) => {
         io.to(game.player1.socketId).emit("gameOver", result)
         io.to(game.player2.socketId).emit("gameOver", result)
 
+        // Update match history for both players
+        updateMatchHistory(game, result)
+
         setTimeout(() => {
           activeGames.delete(gameId)
           console.log(`Game ${gameId} ended and removed after timeout`)
-        }, 60000) 
+        }, 60000)
       }
     })
+
+    // Function to update match history for both players
+    const updateMatchHistory = async (game, result) => {
+      try {
+        const player1Id = game.player1.user.userId
+        const player2Id = game.player2.user.userId
+        const player1Name = game.player1.user.username
+        const player2Name = game.player2.user.username
+
+        // Determine match status for each player
+        let player1Status, player2Status
+
+        if (result.isDraw) {
+          player1Status = "draw"
+          player2Status = "draw"
+        } else if (result.winner === "white") {
+          player1Status = "win"
+          player2Status = "lose"
+        } else if (result.winner === "black") {
+          player1Status = "lose"
+          player2Status = "win"
+        } else {
+          // If no clear winner (e.g., abandoned game), mark as draw
+          player1Status = "draw"
+          player2Status = "draw"
+        }
+
+        // Update player 1's match history
+        const player1Response = await axios.post(`${process.env.BASE_URL || ""}/user/${player1Id}/match-history`, {
+          opponent: player2Name,
+          status: player1Status,
+        })
+
+        // Update player 2's match history
+        const player2Response = await axios.post(`${process.env.BASE_URL || ""}/user/${player2Id}/match-history`, {
+          opponent: player1Name,
+          status: player2Status,
+        })
+
+        // Notify both players to refresh their profile data
+        io.to(game.player1.socketId).emit("matchHistoryUpdated")
+        io.to(game.player2.socketId).emit("matchHistoryUpdated")
+
+        console.log(`Match history updated for game between ${player1Name} and ${player2Name}`)
+      } catch (error) {
+        console.error("Error updating match history:", error)
+      }
+    }
 
     socket.on("requestGameState", () => {
       const gameId = socket.data?.gameId
@@ -373,7 +425,7 @@ io.on("connection", (socket) => {
                 activeGames.delete(gameId)
               }
             }
-          }, 30000) 
+          }, 30000)
         }
       }
 
@@ -396,7 +448,7 @@ setInterval(
     }
   },
   15 * 60 * 1000,
-) 
+)
 
 httpServer.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`)

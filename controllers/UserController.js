@@ -3,7 +3,6 @@ const jwt = require("jsonwebtoken")
 const User = require("../models/userModel")
 require("dotenv").config()
 
-
 if (!process.env.JWT_SECRET) {
   console.error("❌ JWT_SECRET is not defined in UserController!")
 }
@@ -71,10 +70,10 @@ const login = async (req, res) => {
       userId: user._id,
       username: user.username,
       email: user.email,
-      matchHistory: user.matchHistory,
-      wins: user.wins,
-      loses: user.loses,
-      draws: user.draws,
+      matchHistory: user.matchHistory || [],
+      wins: user.wins || 0,
+      loses: user.loses || 0,
+      draws: user.draws || 0,
     }
 
     const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, {
@@ -120,7 +119,16 @@ const getUserProfile = async (req, res) => {
       return res.status(404).json({ message: "User not found" })
     }
 
-    res.status(200).json(user)
+    // Return complete user data including match history
+    res.status(200).json({
+      userId: user._id,
+      username: user.username,
+      email: user.email,
+      matchHistory: user.matchHistory || [],
+      wins: user.wins || 0,
+      loses: user.loses || 0,
+      draws: user.draws || 0,
+    })
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: "Server error" })
@@ -128,69 +136,91 @@ const getUserProfile = async (req, res) => {
 }
 
 const getUserById = async (req, res) => {
-    const { userId } = req.params;
+  const { userId } = req.params
 
-    try {
-        const user = await User.findById(userId);
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        res.status(200).json({ user });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
+  try {
+    const user = await User.findById(userId)
+    if (!user) {
+      return res.status(404).json({ error: "User not found" })
     }
-};
+
+    res.status(200).json({ user })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+}
 
 const addMatchToHistory = async (req, res) => {
-    const { userId } = req.params;
-    const { opponent, status } = req.body;
+  const { userId } = req.params
+  const { opponent, status } = req.body
 
-    try {
-        const user = await User.findById(userId);
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        user.matchHistory.push({ opponent, status });
-
-        if (status === 'win') {
-            user.wins++;
-        } else if (status === 'lose') {
-            user.loses++;
-        } else if (status === 'draw') {
-            user.draws++;
-        }
-
-        await user.save();
-
-        res.status(201).json({ message: 'Match history added successfully', user });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
+  try {
+    const user = await User.findById(userId)
+    if (!user) {
+      return res.status(404).json({ error: "User not found" })
     }
-};
+
+    // Create a new match entry with current timestamp
+    const newMatch = {
+      opponent,
+      status,
+      createdAt: new Date(),
+    }
+
+    // Add to match history
+    user.matchHistory.push(newMatch)
+
+    // Update stats based on match result
+    if (status === "win") {
+      user.wins = (user.wins || 0) + 1
+    } else if (status === "lose") {
+      user.loses = (user.loses || 0) + 1
+    } else if (status === "draw") {
+      user.draws = (user.draws || 0) + 1
+    }
+
+    await user.save()
+
+    // Return the updated user object for immediate UI update
+    res.status(201).json({
+      message: "Match history added successfully",
+      user: {
+        userId: user._id,
+        username: user.username,
+        email: user.email,
+        matchHistory: user.matchHistory,
+        wins: user.wins,
+        loses: user.loses,
+        draws: user.draws,
+      },
+    })
+  } catch (err) {
+    console.error("Error adding match to history:", err)
+    res.status(500).json({ error: err.message })
+  }
+}
 
 const getMatchHistory = async (req, res) => {
-    const { userId } = req.params;
+  const { userId } = req.params
 
-    try {
-        const user = await User.findById(userId);
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        res.status(200).json({ matchHistory: user.matchHistory });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
+  try {
+    const user = await User.findById(userId)
+    if (!user) {
+      return res.status(404).json({ error: "User not found" })
     }
-};
+
+    res.status(200).json({ matchHistory: user.matchHistory || [] })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+}
 
 module.exports = {
-    register,
-    login,
-    getUserById,
-    getUserProfile,
-    addMatchToHistory,
-    getMatchHistory,
-    logout,
-};
+  register,
+  login,
+  getUserById,
+  getUserProfile,
+  addMatchToHistory,
+  getMatchHistory,
+  logout,
+}
